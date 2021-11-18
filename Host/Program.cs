@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Text;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace Host
 {
@@ -11,23 +12,22 @@ namespace Host
     {
         static void Main(string[] args)
         {
-            var host = new Host();
-
+            var host = new HostBase();
             host.RunService();
         }
     }
 
-    class Host
+    class HostBase
     {
         TcpListener listener;
-        LinkedList<Client> clients;
+        LinkedList<ClientBase> clients;
 
         int port = 34817;
 
         public void RunService()
         {
             listener = new TcpListener(IPAddress.Any, port);
-            clients = new LinkedList<Client>();
+            clients = new LinkedList<ClientBase>();
 
             listener.Start();
 
@@ -44,7 +44,8 @@ namespace Host
             while (true)
             {
                 var tcpClient = listener.AcceptTcpClient();
-                var client = new Client(tcpClient.Client);
+                var client = new ClientBase(tcpClient.Client);
+                client.SendMessage("connected");
 
                 lock (clients)
                 {
@@ -59,20 +60,42 @@ namespace Host
         {
             lock (clients)
             {
+                var disconnectedClients = new LinkedList<ClientBase>();
+
                 foreach (var client in clients)
                 {
-                    ProcessClient(client);
+                    try
+                    {
+                        ProcessClient(client);
+                    }
+                    catch (Exception x)
+                    {
+                        Console.Error.WriteLine($"При обработке клиента {client.Socket.RemoteEndPoint} возникла ошибка:");
+                        Console.Error.WriteLine(x.Message);
+
+                        try { client.SendMessage("Dalbaeb ti"); } catch { }
+
+                        disconnectedClients.AddLast(client);
+                    }
                 }
+
+                foreach (var client in disconnectedClients)
+                {
+                    client.Socket.Close();
+                    clients.Remove(client);
+                }
+
+                Console.Title = $"{clients.Count}";
             }
         }
 
         // состав пакета: int - длина строки в байтах, байты строки
-        private void ProcessClient(Client client)
+        private void ProcessClient(ClientBase client)
         {
             if (client.Socket.Available == 0)
                 return;
 
-            if (client.Status == Client.StatusEnum.Waiting)
+            if (client.Status == ClientBase.StatusEnum.Waiting)
             {
                 if (client.Socket.Available >= 4)
                 {
@@ -80,43 +103,66 @@ namespace Host
                     client.Socket.Receive(lengthBytes);
 
                     client.BytesToReceiveCount = BitConverter.ToInt32(lengthBytes, 0);
-                    client.Status = Client.StatusEnum.Receiving;
+                    client.Status = ClientBase.StatusEnum.Receiving;
+
+                    if (client.BytesToReceiveCount == 0)
+                    {
+                        throw new Exception("Wrong package length");
+                    }
                 }
             }
 
-            if (client.Status == Client.StatusEnum.Receiving)
+            if (client.Status == ClientBase.StatusEnum.Receiving)
             {
                 if (client.Socket.Available >= client.BytesToReceiveCount)
                 {
-                    client.Status = Client.StatusEnum.Processing;
+                    client.Status = ClientBase.StatusEnum.Processing;
                 }
             }
 
-            if (client.Status == Client.StatusEnum.Processing)
+            if (client.Status == ClientBase.StatusEnum.Processing)
             {
                 var messageBytes = new byte[client.BytesToReceiveCount];
                 client.Socket.Receive(messageBytes);
 
-                string message = Encoding.Unicode.GetString(messageBytes);
-                Console.WriteLine("Получена строка: " + message);
+                string message = Encoding.UTF8.GetString(messageBytes);
+
+                ProcessReceivedMessage(client, message);
 
                 client.BytesToReceiveCount = 0;
-                client.Status = Client.StatusEnum.Waiting;
+                client.Status = ClientBase.StatusEnum.Waiting;
             }
+        }
+
+        private void ProcessReceivedMessage(ClientBase client, string message)
+        {
+            Console.WriteLine($"Получена строка: {message}");
+            Console.WriteLine($"  От: {client.Socket.RemoteEndPoint}");
+
+            client.SendMessage("ok");
         }
     }
 
-    class Client
+    class ClientBase
     {
         public Socket Socket { get; set; }
         public StatusEnum Status { get; set; }
         public int BytesToReceiveCount { get; set; }
 
-        public Client(Socket socket)
+        public ClientBase(Socket socket)
         {
             Socket = socket;
             Status = StatusEnum.Waiting;
             BytesToReceiveCount = 0;
+        }
+
+        public void SendMessage(string message)
+        {
+            byte[] bytesToSend = Encoding.UTF8.GetBytes(message);
+            byte[] bytesLen = BitConverter.GetBytes(bytesToSend.Length);
+
+            Socket.Send(bytesLen);
+            Socket.Send(bytesToSend);
         }
 
         // Waiting - длина сообщения еще не пришла (4 байта)

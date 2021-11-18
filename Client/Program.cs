@@ -8,21 +8,53 @@ namespace Client
     {
         static void Main(string[] args)
         {
-            var client = new TcpClient();
+            var client = new Client();
+            client.Connect();
+        }
+    }
 
-            client.Connect("localhost", 34817);
-            
+    class Client
+    {
+        TcpClient tcpClient;
+
+        public void Connect()
+        {
+            tcpClient = new TcpClient();
+            tcpClient.Connect("localhost", 34817);
+
+            string status = ReadMessage();
+            Console.WriteLine(status);
+
             while (true)
             {
-                Console.Write("Введите сообщение: ");
+                string line = Console.ReadLine();
+                string result = SendMessage(line);
 
-                var line = Console.ReadLine();
-
-                var bytes = Encoding.Unicode.GetBytes(line);
-
-                client.Client.Send(BitConverter.GetBytes(bytes.Length));
-                client.Client.Send(bytes);
+                Console.WriteLine(result);
             }
+        }
+
+        private string ReadMessage()
+        {
+            byte[] lengthBytes = new byte[4];
+            tcpClient.Client.Receive(lengthBytes);
+
+            byte[] messageBytes = new byte[BitConverter.ToInt32(lengthBytes, 0)];
+            tcpClient.Client.Receive(messageBytes);
+
+            return Encoding.UTF8.GetString(messageBytes);
+        }
+
+        public string SendMessage(string message)
+        {
+            byte[] bytesToSend = Encoding.UTF8.GetBytes(message);
+            byte[] bytesLen = BitConverter.GetBytes(bytesToSend.Length);
+
+            tcpClient.Client.Send(bytesLen);
+            tcpClient.Client.Send(bytesToSend);
+
+            string result = ReadMessage();
+            return result;
         }
     }
 }
